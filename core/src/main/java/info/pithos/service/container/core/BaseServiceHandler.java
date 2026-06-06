@@ -1,9 +1,9 @@
 package info.pithos.service.container.core;
 
 import com.google.protobuf.Message;
-import info.pithos.runtime.model.protocol.http.RequestContextOuterClass.AuthContext;
-import info.pithos.runtime.model.protocol.http.RequestContextOuterClass.LogLevelType;
-import info.pithos.runtime.model.protocol.http.RequestContextOuterClass.RequestContext;
+import info.pithos.runtime.model.protocol.http.Context.AuthContext;
+import info.pithos.runtime.model.protocol.http.Context.LogLevelType;
+import info.pithos.runtime.model.protocol.http.Context.RequestContext;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.MultiMap;
 
