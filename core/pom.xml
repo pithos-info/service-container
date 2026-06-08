@@ -20,6 +20,22 @@
             <artifactId>protobuf-java</artifactId>
         </dependency>
         <dependency>
+            <groupId>info.pithos.runtime.core.context</groupId>
+            <artifactId>pithos-runtime-core-context</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>info.pithos.auth</groupId>
+            <artifactId>info-pithos-auth-model</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>info.pithos.auth</groupId>
+            <artifactId>info-pithos-auth-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+        </dependency>
+        <dependency>
             <groupId>info.pithos.runtime.core</groupId>
             <artifactId>pithos-runtime-core-model</artifactId>
         </dependency>

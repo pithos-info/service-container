@@ -1,6 +1,10 @@
 package info.pithos.service.container.core;
 
 import com.google.protobuf.Message;
+import info.pithos.auth.OAuthClient;
+import info.pithos.auth.model.TokenIntrospection;
+import info.pithos.runtime.core.context.ErrorCode;
+import info.pithos.runtime.core.context.ServiceException;
 import info.pithos.runtime.model.protocol.Context.AuthContext;
 import info.pithos.runtime.model.protocol.Context.LogLevelType;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
@@ -8,11 +12,13 @@ import io.smallrye.mutiny.Uni;
 import io.vertx.core.MultiMap;
 
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Abstract base for all service handlers. Subclasses implement the business
  * logic via {@link #handle(Message, RequestContext)}; the HTTP entry point
- * {@link #handleHttp(Message, MultiMap)} maps inbound headers to the shared
+ * {@link #handleHttp(Message, MultiMap)} validates the Bearer token via
+ * {@link OAuthClient#introspectToken} and maps inbound headers to the shared
  * {@link RequestContext} proto before delegating.
  *
  * <p>gRPC interceptors should build {@link RequestContext} from
@@ -21,6 +27,8 @@ import java.util.Set;
  */
 public abstract class BaseServiceHandler<Req extends Message, Resp extends Message>
         implements ServiceHandler<Req, Resp> {
+
+    private static final String BEARER_PREFIX = "Bearer ";
 
     private static final Set<String> MAPPED_HEADERS = Set.of(
             "x-request-id", "x-correlation-id",
@@ -35,16 +43,56 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
             "accept-language"
     );
 
-    public final Uni<Resp> handleHttp(Req request, MultiMap httpHeaders) {
-        return handle(request, buildRequestContext(httpHeaders));
+    private final OAuthClient oAuthClient;
+
+    protected BaseServiceHandler(OAuthClient oAuthClient) {
+        if (oAuthClient == null) throw new IllegalArgumentException("oAuthClient must not be null");
+        this.oAuthClient = oAuthClient;
     }
 
-    private static RequestContext buildRequestContext(MultiMap h) {
+    protected final OAuthClient oAuthClient() {
+        return oAuthClient;
+    }
+
+    public final Uni<Resp> handleHttp(Req request, MultiMap httpHeaders) {
+        String authHeader = httpHeaders.get("Authorization");
+        if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
+            String token = authHeader.substring(BEARER_PREFIX.length());
+            RequestContext bootstrap = buildRequestContext(httpHeaders, null);
+            return Uni.createFrom()
+                    .completionStage(() -> oAuthClient.introspectToken(bootstrap, token))
+                    .flatMap(introspection -> {
+                        if (!introspection.active()) {
+                            return Uni.createFrom().failure(
+                                    new ServiceException(ErrorCode.UNAUTHORIZED, "OAuth token is not active"));
+                        }
+                        return handle(request, buildRequestContext(httpHeaders, introspection));
+                    })
+                    .onFailure().transform(BaseServiceHandler::normalizeException);
+        }
+        return handle(request, buildRequestContext(httpHeaders, null))
+                .onFailure().transform(BaseServiceHandler::normalizeException);
+    }
+
+    private static Throwable normalizeException(Throwable t) {
+        if (t instanceof ServiceException) return t;
+        if (t instanceof IllegalArgumentException)
+            return new ServiceException(ErrorCode.BAD_REQUEST, t.getMessage(), t);
+        if (t instanceof SecurityException)
+            return new ServiceException(ErrorCode.UNAUTHORIZED, t.getMessage(), t);
+        return new ServiceException(ErrorCode.INTERNAL_SERVER_ERROR, t.getMessage(), t);
+    }
+
+    private static RequestContext buildRequestContext(MultiMap h, TokenIntrospection introspection) {
         RequestContext.Builder ctx = RequestContext.newBuilder();
         AuthContext.Builder auth = AuthContext.newBuilder();
 
         String requestId = coalesce(h, "X-Request-Id", "X-Correlation-Id");
-        if (requestId != null) ctx.setRequestId(requestId);
+        if (requestId != null) {
+            ctx.setRequestId(requestId);
+        } else {
+            ctx.setRequestId(UUID.randomUUID().toString());
+        }
 
         String enterpriseId = h.get("X-Enterprise-Id");
         if (enterpriseId != null) {
@@ -55,8 +103,13 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         String authToken = h.get("Authorization");
         if (authToken != null) auth.setUserAuthToken(authToken);
 
-        String userId = h.get("X-User-Id");
-        if (userId != null) auth.setUserId(userId);
+        // prefer the validated subject from token introspection over the header claim
+        if (introspection != null && introspection.subject() != null) {
+            auth.setUserId(introspection.subject());
+        } else {
+            String userId = h.get("X-User-Id");
+            if (userId != null) auth.setUserId(userId);
+        }
 
         String host = h.get("Host");
         if (host != null) ctx.setHost(host);
