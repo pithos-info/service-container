@@ -8,8 +8,11 @@ import info.pithos.runtime.core.context.ServiceException;
 import info.pithos.runtime.model.protocol.Context.AuthContext;
 import info.pithos.runtime.model.protocol.Context.LogLevelType;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
+import info.pithos.serde.ProtoBufSerde;
+import info.pithos.serde.SerdeException;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.MultiMap;
+import io.vertx.ext.web.RoutingContext;
 
 import java.util.Set;
 import java.util.UUID;
@@ -149,5 +152,92 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
             if (v != null && !v.isBlank()) return v;
         }
         return null;
+    }
+
+    // ── Vert.x routing helpers ────────────────────────────────────────────────
+
+    /**
+     * Calls {@link #handleHttp} with the routing context's headers, writes the
+     * proto response as JSON on success, maps {@link ServiceException} to the
+     * appropriate HTTP status on failure.
+     */
+    public static <Req extends Message, Resp extends Message> void route(
+            RoutingContext ctx, int successStatus,
+            BaseServiceHandler<Req, Resp> handler, Req req) {
+        handler.handleHttp(req, ctx.request().headers())
+            .subscribe().with(
+                resp -> respond(ctx, successStatus, resp),
+                err  -> routingError(ctx, err)
+            );
+    }
+
+    /** Variant for operations that produce no response body (204 No Content). */
+    public static <Req extends Message, Resp extends Message> void routeNoContent(
+            RoutingContext ctx,
+            BaseServiceHandler<Req, Resp> handler, Req req) {
+        handler.handleHttp(req, ctx.request().headers())
+            .subscribe().with(
+                resp -> ctx.response().setStatusCode(204).end(),
+                err  -> routingError(ctx, err)
+            );
+    }
+
+    /**
+     * Parses the JSON request body into the given proto builder.
+     * Sends a 400 response and returns {@code null} on parse failure —
+     * callers must guard against null before proceeding.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T extends Message> T parseBody(RoutingContext ctx, Message.Builder builder) {
+        String body = ctx.body().asString();
+        if (body == null || body.isBlank()) {
+            routingError(ctx, new ServiceException(ErrorCode.BAD_REQUEST, "Request body is required"));
+            return null;
+        }
+        try {
+            return (T) new ProtoBufSerde<>(body, builder).getObject();
+        } catch (SerdeException e) {
+            routingError(ctx, new ServiceException(ErrorCode.BAD_REQUEST,
+                "Invalid request body: " + e.getMessage()));
+            return null;
+        }
+    }
+
+    /** Writes a proto message as JSON with the given HTTP status. */
+    public static void respond(RoutingContext ctx, int status, Message proto) {
+        try {
+            ctx.response()
+                .setStatusCode(status)
+                .putHeader("Content-Type", "application/json")
+                .end(new ProtoBufSerde<>(proto).serialize());
+        } catch (Exception e) {
+            ctx.fail(500, e);
+        }
+    }
+
+    /** Maps a {@link ServiceException} (or any throwable) to an HTTP error response. */
+    public static void routingError(RoutingContext ctx, Throwable t) {
+        Throwable normalized = normalizeException(t);
+        int status = 500;
+        String message = "Internal server error";
+        if (normalized instanceof ServiceException se) {
+            message = se.getMessage() != null ? se.getMessage() : message;
+            status = switch (se.getErrorCode()) {
+                case BAD_REQUEST         -> 400;
+                case UNAUTHORIZED        -> 401;
+                case FORBIDDEN           -> 403;
+                case NOT_FOUND           -> 404;
+                case CONFLICT            -> 409;
+                case TOO_MANY_REQUESTS   -> 429;
+                case NOT_IMPLEMENTED     -> 501;
+                case SERVICE_UNAVAILABLE -> 503;
+                default                  -> 500;
+            };
+        }
+        String safe = message.replace("\\", "\\\\").replace("\"", "\\\"");
+        ctx.response()
+            .setStatusCode(status)
+            .putHeader("Content-Type", "application/json")
+            .end("{\"error\":\"" + safe + "\"}");
     }
 }
