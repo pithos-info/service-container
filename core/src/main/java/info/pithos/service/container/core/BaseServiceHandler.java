@@ -33,6 +33,12 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
 
     private static final String BEARER_PREFIX = "Bearer ";
 
+    private static volatile ApiKeyResolver globalApiKeyResolver;
+
+    public static void setApiKeyResolver(ApiKeyResolver resolver) {
+        globalApiKeyResolver = resolver;
+    }
+
     private static final Set<String> MAPPED_HEADERS = Set.of(
             "x-request-id", "x-correlation-id",
             "x-enterprise-id",
@@ -62,8 +68,11 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
             String token = authHeader.substring(BEARER_PREFIX.length());
             RequestContext bootstrap = buildRequestContext(httpHeaders, null);
+            ApiKeyResolver resolver = globalApiKeyResolver;
             return Uni.createFrom()
-                    .completionStage(() -> oAuthClient.introspectToken(bootstrap, token))
+                    .completionStage(isApiKey(token) && resolver != null
+                        ? () -> resolver.resolve(bootstrap, token)
+                        : () -> oAuthClient.introspectToken(bootstrap, token))
                     .flatMap(introspection -> {
                         if (!introspection.active()) {
                             return Uni.createFrom().failure(
@@ -106,12 +115,16 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         String authToken = h.get("Authorization");
         if (authToken != null) auth.setUserAuthToken(authToken);
 
-        // prefer the validated subject from token introspection over the header claim
+        // prefer validated identity from token introspection over header claims
         if (introspection != null && introspection.subject() != null) {
             auth.setUserId(introspection.subject());
         } else {
             String userId = h.get("X-User-Id");
             if (userId != null) auth.setUserId(userId);
+        }
+        if (introspection != null && introspection.enterpriseId() != null) {
+            ctx.setEnterpriseId(introspection.enterpriseId());
+            auth.setEnterpriseId(introspection.enterpriseId());
         }
 
         String host = h.get("Host");
@@ -144,6 +157,15 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
                 .forEach(name -> ctx.putAttributes(name, h.get(name)));
 
         return ctx.setAuthContext(auth).build();
+    }
+
+    // JWTs have exactly two dots (header.payload.signature); API keys have none
+    private static boolean isApiKey(String token) {
+        int dots = 0;
+        for (int i = 0; i < token.length(); i++) {
+            if (token.charAt(i) == '.') dots++;
+        }
+        return dots != 2;
     }
 
     private static String coalesce(MultiMap h, String... names) {
