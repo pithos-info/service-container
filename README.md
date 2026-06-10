@@ -34,6 +34,7 @@ service-container/
     └── src/main/java/info/pithos/service/container/core/
         ├── ServiceHandler.java
         ├── BaseServiceHandler.java
+        ├── ApiKeyResolver.java            pluggable API key auth (optional)
         ├── LoginHandler.java
         ├── GetHandler.java / PostHandler.java / PutHandler.java / PatchHandler.java
         ├── ProtobufJsonProvider.java
@@ -76,14 +77,34 @@ Marker interfaces that extend `ServiceHandler`. The routing layer uses the type 
 | `PutHandler<Req, Resp>` | `PUT` | request body (full replace) |
 | `PatchHandler<Req, Resp>` | `PATCH` | request body (partial update) |
 
+### `ApiKeyResolver`
+
+Optional interface for plugging in domain-level API key authentication:
+
+```java
+public interface ApiKeyResolver {
+    CompletableFuture<TokenIntrospection> resolve(RequestContext bootstrap, String rawKey);
+}
+```
+
+Implement this in an application module (e.g. RBAC) and install it once at startup:
+
+```java
+BaseServiceHandler.setApiKeyResolver(myApiKeyResolver);
+```
+
+No handler constructors need to change — the resolver is stored in a static field and consulted automatically during `handleHttp()`.
+
 ### `BaseServiceHandler<Req, Resp>`
 
 Abstract base that requires an `OAuthClient` at construction time. Before delegating to `handle()` it:
 
 1. Extracts the `Authorization: Bearer <token>` header (if present)
-2. Calls `OAuthClient.introspectToken()` and rejects inactive tokens with `UNAUTHORIZED`
-3. Populates `AuthContext.userId` from the validated token `subject` (not the untrusted `X-User-Id` header)
-4. Normalises any exception thrown by `handle()` into a `ServiceException` with the appropriate `ErrorCode`
+2. **JWT vs API key detection** — if the bearer value contains fewer than 2 dots it is treated as an API key, not a JWT
+3. For JWTs: calls `OAuthClient.introspectToken()` and rejects inactive tokens with `UNAUTHORIZED`
+4. For API keys: calls `ApiKeyResolver.resolve()` (if installed); inactive result → `UNAUTHORIZED`
+5. Populates `AuthContext.userId` from the validated token `subject`; populates `AuthContext.enterpriseId` from `introspection.enterpriseId()` if set (API keys carry it), otherwise falls back to the `X-Enterprise-Id` header
+6. Normalises any exception thrown by `handle()` into a `ServiceException` with the appropriate `ErrorCode`
 
 ```java
 public abstract class BaseServiceHandler<Req extends Message, Resp extends Message>
@@ -207,7 +228,7 @@ service AuthService {
 | HTTP Header | `RequestContext` field |
 |---|---|
 | `X-Request-Id` / `X-Correlation-Id` | `requestId` (UUID generated if absent) |
-| `X-Enterprise-Id` | `enterpriseId`, `authContext.enterpriseId` |
+| `X-Enterprise-Id` | `enterpriseId`, `authContext.enterpriseId` (overridden by `introspection.enterpriseId()` when set — API keys carry enterprise identity) |
 | `Authorization` | `authContext.userAuthToken`; token subject → `authContext.userId` |
 | `X-User-Id` | `authContext.userId` (only when no Bearer token is present) |
 | `Host` | `host` |
