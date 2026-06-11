@@ -10,6 +10,7 @@ import info.pithos.runtime.model.protocol.Context.LogLevelType;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
 import info.pithos.serde.ProtoBufSerde;
 import info.pithos.serde.SerdeException;
+import info.pithos.service.container.core.auth.ApiKeyResolver;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.MultiMap;
 import io.vertx.ext.web.RoutingContext;
