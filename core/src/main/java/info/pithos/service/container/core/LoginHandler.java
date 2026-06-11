@@ -17,19 +17,29 @@ public class LoginHandler extends BaseServiceHandler<LoginRequest, LoginResponse
 
     @Override
     public Uni<LoginResponse> handle(LoginRequest request, RequestContext context) {
+        String idToken = request.getIdToken();
+        if (!idToken.isBlank()) {
+            return Uni.createFrom()
+                    .<TokenResponse>completionStage(() -> oAuthClient().loginWithIdToken(context, idToken))
+                    .map(LoginHandler::toLoginResponse);
+        }
         String username = request.getUsername();
         String password = request.getPassword();
         if (username.isBlank() || password.isBlank()) {
-            throw new ServiceException(ErrorCode.BAD_REQUEST, "username and password are required");
+            throw new ServiceException(ErrorCode.BAD_REQUEST, "username, password, or idToken is required");
         }
         return Uni.createFrom()
                 .<TokenResponse>completionStage(() -> oAuthClient().login(context, username, password))
-                .map(token -> LoginResponse.newBuilder()
-                        .setAccessToken(token.accessToken() != null ? token.accessToken() : "")
-                        .setRefreshToken(token.refreshToken() != null ? token.refreshToken() : "")
-                        .setExpiresIn(token.expiresIn())
-                        .setTokenType(token.tokenType() != null ? token.tokenType() : "Bearer")
-                        .setScope(token.scope() != null ? token.scope() : "")
-                        .build());
+                .map(LoginHandler::toLoginResponse);
+    }
+
+    private static LoginResponse toLoginResponse(TokenResponse token) {
+        return LoginResponse.newBuilder()
+                .setAccessToken(token.accessToken() != null ? token.accessToken() : "")
+                .setRefreshToken(token.refreshToken() != null ? token.refreshToken() : "")
+                .setExpiresIn(token.expiresIn())
+                .setTokenType(token.tokenType() != null ? token.tokenType() : "Bearer")
+                .setScope(token.scope() != null ? token.scope() : "")
+                .build();
     }
 }

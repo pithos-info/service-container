@@ -195,9 +195,28 @@ throw new ServiceException(ErrorCode.FORBIDDEN, "insufficient permissions");
 
 ### REST — `POST /auth/login`
 
-Handled by `AuthRestResource` → `LoginHandler`. Accepts `LoginRequest` JSON, delegates to `OAuthClient.login()`, returns `LoginResponse` JSON.
+Handled by `AuthRestResource` → `LoginHandler`. Accepts `LoginRequest` JSON, returns `LoginResponse` JSON.
+
+`LoginHandler` routes on the first non-blank credential it finds:
+
+1. **`idToken` present** — delegates to `OAuthClient.loginWithIdToken()`. Use this when the client has already authenticated with Google and holds a Google ID token (browser, SPA, mobile). The GCP implementation validates the token via Google's `tokeninfo` endpoint and returns it as the `accessToken`. The Keycloak implementation exchanges it for a Keycloak token pair via the RFC 8693 token-exchange grant.
+2. **`username` + `password`** — delegates to `OAuthClient.login()` (Resource Owner Password Credentials grant, Keycloak only).
+
+If neither is provided the handler returns `400 BAD_REQUEST`.
 
 ```
+# Google ID token login (GCP or Keycloak with Google IdP broker)
+POST /auth/login
+Content-Type: application/json
+
+{ "idToken": "<google-id-token>" }
+
+→ 200 OK
+{ "accessToken": "...", "refreshToken": "...", "expiresIn": 3599, "tokenType": "Bearer", "scope": "" }
+```
+
+```
+# Username / password login (Keycloak ROPC only)
 POST /auth/login
 Content-Type: application/json
 

@@ -1,4 +1,4 @@
-package info.pithos.service.container.core;
+package info.pithos.rbac.auth;
 
 import info.pithos.auth.model.TokenIntrospection;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
