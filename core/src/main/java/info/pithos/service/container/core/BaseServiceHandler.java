@@ -11,6 +11,7 @@ import info.pithos.runtime.model.protocol.Context.RequestContext;
 import info.pithos.serde.ProtoBufSerde;
 import info.pithos.serde.SerdeException;
 import info.pithos.service.container.core.auth.ApiKeyResolver;
+import info.pithos.service.container.core.auth.UserContextResolver;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.MultiMap;
 import io.vertx.ext.web.RoutingContext;
@@ -35,9 +36,14 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
     private static final String BEARER_PREFIX = "Bearer ";
 
     private static volatile ApiKeyResolver globalApiKeyResolver;
+    private static volatile UserContextResolver globalUserContextResolver;
 
     public static void setApiKeyResolver(ApiKeyResolver resolver) {
         globalApiKeyResolver = resolver;
+    }
+
+    public static void setUserContextResolver(UserContextResolver resolver) {
+        globalUserContextResolver = resolver;
     }
 
     private static final Set<String> MAPPED_HEADERS = Set.of(
@@ -64,6 +70,10 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         return oAuthClient;
     }
 
+    protected boolean requiresAuthentication() {
+        return true;
+    }
+
     public final Uni<Resp> handleHttp(Req request, MultiMap httpHeaders) {
         String authHeader = httpHeaders.get("Authorization");
         if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
@@ -79,8 +89,22 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
                             return Uni.createFrom().failure(
                                     new ServiceException(ErrorCode.UNAUTHORIZED, "OAuth token is not active"));
                         }
-                        return handle(request, buildRequestContext(httpHeaders, introspection));
+                        RequestContext rc = buildRequestContext(httpHeaders, introspection);
+                        if (rc.getAuthContext().getUserId().isBlank()) {
+                            return Uni.createFrom().failure(
+                                    new ServiceException(ErrorCode.UNAUTHORIZED, "authenticated user required"));
+                        }
+                        UserContextResolver ucr = globalUserContextResolver;
+                        Uni<RequestContext> ctxUni = ucr != null
+                            ? Uni.createFrom().completionStage(() -> ucr.resolve(rc))
+                            : Uni.createFrom().item(rc);
+                        return ctxUni.flatMap(resolvedRc -> handle(request, resolvedRc));
                     })
+                    .onFailure().transform(BaseServiceHandler::normalizeException);
+        }
+        if (requiresAuthentication()) {
+            return Uni.createFrom().<Resp>failure(
+                    new ServiceException(ErrorCode.UNAUTHORIZED, "authentication required"))
                     .onFailure().transform(BaseServiceHandler::normalizeException);
         }
         return handle(request, buildRequestContext(httpHeaders, null))

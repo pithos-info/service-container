@@ -16,6 +16,11 @@ public class LoginHandler extends BaseServiceHandler<LoginRequest, LoginResponse
     }
 
     @Override
+    protected boolean requiresAuthentication() {
+        return false;
+    }
+
+    @Override
     public Uni<LoginResponse> handle(LoginRequest request, RequestContext context) {
         String idToken = request.getIdToken();
         if (!idToken.isBlank()) {
