@@ -95,16 +95,37 @@ BaseServiceHandler.setApiKeyResolver(myApiKeyResolver);
 
 No handler constructors need to change — the resolver is stored in a static field and consulted automatically during `handleHttp()`.
 
+### `UserContextResolver`
+
+Optional interface for validating the authenticated identity against the application's own user store and enriching the `RequestContext`:
+
+```java
+public interface UserContextResolver {
+    CompletableFuture<RequestContext> resolve(RequestContext rc);
+}
+```
+
+Called after successful token introspection (or API key resolution) and before `handle()`. The resolver receives the `RequestContext` with the IdP subject already set as `userId`, and returns an enriched context — typically with the internal user ID replacing the IdP subject. If the enterprise or user is not found the resolver throws `UNAUTHORIZED`.
+
+Install at startup exactly like `ApiKeyResolver`:
+
+```java
+BaseServiceHandler.setUserContextResolver(myUserContextResolver);
+```
+
 ### `BaseServiceHandler<Req, Resp>`
 
 Abstract base that requires an `OAuthClient` at construction time. Before delegating to `handle()` it:
 
-1. Extracts the `Authorization: Bearer <token>` header (if present)
+1. If no `Authorization: Bearer` header and `requiresAuthentication()` is `true` → `401 UNAUTHORIZED`
 2. **JWT vs API key detection** — if the bearer value contains fewer than 2 dots it is treated as an API key, not a JWT
 3. For JWTs: calls `OAuthClient.introspectToken()` and rejects inactive tokens with `UNAUTHORIZED`
 4. For API keys: calls `ApiKeyResolver.resolve()` (if installed); inactive result → `UNAUTHORIZED`
-5. Populates `AuthContext.userId` from the validated token `subject`; populates `AuthContext.enterpriseId` from `introspection.enterpriseId()` if set (API keys carry it), otherwise falls back to the `X-Enterprise-Id` header
-6. Normalises any exception thrown by `handle()` into a `ServiceException` with the appropriate `ErrorCode`
+5. Populates `AuthContext.userId` from the validated token `subject`; populates `AuthContext.enterpriseId` from `introspection.enterpriseId()` if set (API keys carry it), otherwise falls back to the `X-Enterprise-Id` header; blank `userId` after introspection → `UNAUTHORIZED`
+6. If `UserContextResolver` is installed: calls `resolve(rc)` — validates the enterprise and user exist in the application store and returns an enriched `RequestContext` (e.g. IdP subject replaced with internal user ID); resolver throwing → propagated as-is
+7. Normalises any exception thrown by `handle()` into a `ServiceException` with the appropriate `ErrorCode`
+
+`requiresAuthentication()` defaults to `true`. Override to `false` in handlers that must be publicly accessible (e.g. `LoginHandler`).
 
 ```java
 public abstract class BaseServiceHandler<Req extends Message, Resp extends Message>
