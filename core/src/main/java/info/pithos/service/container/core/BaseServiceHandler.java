@@ -8,6 +8,8 @@ import info.pithos.runtime.core.context.ServiceException;
 import info.pithos.runtime.model.protocol.Context.AuthContext;
 import info.pithos.runtime.model.protocol.Context.LogLevelType;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import info.pithos.serde.ProtoBufSerde;
 import info.pithos.serde.SerdeException;
 import info.pithos.service.container.core.auth.ApiKeyResolver;
@@ -33,6 +35,7 @@ import java.util.UUID;
 public abstract class BaseServiceHandler<Req extends Message, Resp extends Message>
         implements ServiceHandler<Req, Resp> {
 
+    private static final Logger log = Logger.getLogger(BaseServiceHandler.class.getName());
     private static final String BEARER_PREFIX = "Bearer ";
 
     private static volatile ApiKeyResolver globalApiKeyResolver;
@@ -117,6 +120,7 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
             return new ServiceException(ErrorCode.BAD_REQUEST, t.getMessage(), t);
         if (t instanceof SecurityException)
             return new ServiceException(ErrorCode.UNAUTHORIZED, t.getMessage(), t);
+        log.log(Level.SEVERE, "Unexpected exception in handler", t);
         return new ServiceException(ErrorCode.INTERNAL_SERVER_ERROR, t.getMessage(), t);
     }
 
@@ -258,12 +262,16 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
                 .putHeader("Content-Type", "application/json")
                 .end(new ProtoBufSerde<>(proto).serialize());
         } catch (Exception e) {
-            ctx.fail(500, e);
+            log.log(Level.SEVERE, "Failed to serialize response proto", e);
+            routingError(ctx, e);
         }
     }
 
     /** Maps a {@link ServiceException} (or any throwable) to an HTTP error response. */
     public static void routingError(RoutingContext ctx, Throwable t) {
+        if (!(t instanceof ServiceException)) {
+            log.log(Level.SEVERE, "Unhandled exception in handler", t);
+        }
         Throwable normalized = normalizeException(t);
         int status = 500;
         String message = "Internal server error";
