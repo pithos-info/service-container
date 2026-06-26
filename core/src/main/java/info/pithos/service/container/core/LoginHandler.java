@@ -17,6 +17,7 @@
 package info.pithos.service.container.core;
 
 import info.pithos.authn.OAuthClient;
+import info.pithos.runtime.core.context.ApplicationContext;
 import info.pithos.authn.model.Auth.LoginRequest;
 import info.pithos.authn.model.Auth.LoginResponse;
 import info.pithos.authn.model.TokenResponse;
@@ -27,8 +28,8 @@ import io.smallrye.mutiny.Uni;
 
 public class LoginHandler extends BaseServiceHandler<LoginRequest, LoginResponse> {
 
-    public LoginHandler(OAuthClient oAuthClient) {
-        super(oAuthClient);
+    public LoginHandler(ApplicationContext applicationContext, OAuthClient oAuthClient) {
+        super(applicationContext, oAuthClient);
     }
 
     @Override
