@@ -24,12 +24,12 @@
             <artifactId>pithos-runtime-core-context</artifactId>
         </dependency>
         <dependency>
-            <groupId>info.pithos.auth</groupId>
-            <artifactId>info-pithos-auth-model</artifactId>
+            <groupId>info.pithos.authn</groupId>
+            <artifactId>info-pithos-authn-model</artifactId>
         </dependency>
         <dependency>
-            <groupId>info.pithos.auth</groupId>
-            <artifactId>info-pithos-auth-api</artifactId>
+            <groupId>info.pithos.authn</groupId>
+            <artifactId>info-pithos-authn-api</artifactId>
         </dependency>
         <dependency>
             <groupId>io.grpc</groupId>

@@ -16,10 +16,10 @@
 
 package info.pithos.service.container.core;
 
-import info.pithos.auth.OAuthClient;
-import info.pithos.auth.model.Auth.LoginRequest;
-import info.pithos.auth.model.Auth.LoginResponse;
-import info.pithos.auth.model.TokenResponse;
+import info.pithos.authn.OAuthClient;
+import info.pithos.authn.model.Auth.LoginRequest;
+import info.pithos.authn.model.Auth.LoginResponse;
+import info.pithos.authn.model.TokenResponse;
 import info.pithos.runtime.core.context.ErrorCode;
 import info.pithos.runtime.core.context.ServiceException;
 import info.pithos.runtime.model.protocol.Context.RequestContext;

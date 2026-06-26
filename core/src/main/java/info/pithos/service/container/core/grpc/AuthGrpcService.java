@@ -16,9 +16,9 @@
 
 package info.pithos.service.container.core.grpc;
 
-import info.pithos.auth.model.Auth.LoginRequest;
-import info.pithos.auth.model.Auth.LoginResponse;
-import info.pithos.auth.model.AuthServiceGrpc;
+import info.pithos.authn.model.Auth.LoginRequest;
+import info.pithos.authn.model.Auth.LoginResponse;
+import info.pithos.authn.model.AuthServiceGrpc;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
 import info.pithos.service.container.core.LoginHandler;
 import io.grpc.Context;

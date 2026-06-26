@@ -16,7 +16,7 @@
 
 package info.pithos.service.container.core.auth;
 
-import info.pithos.auth.model.TokenIntrospection;
+import info.pithos.authn.model.TokenIntrospection;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
 
 import java.nio.charset.StandardCharsets;

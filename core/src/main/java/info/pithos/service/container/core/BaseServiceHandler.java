@@ -17,8 +17,8 @@
 package info.pithos.service.container.core;
 
 import com.google.protobuf.Message;
-import info.pithos.auth.OAuthClient;
-import info.pithos.auth.model.TokenIntrospection;
+import info.pithos.authn.OAuthClient;
+import info.pithos.authn.model.TokenIntrospection;
 import info.pithos.runtime.core.context.ErrorCode;
 import info.pithos.runtime.core.context.ServiceException;
 import info.pithos.runtime.model.protocol.Context.AuthContext;

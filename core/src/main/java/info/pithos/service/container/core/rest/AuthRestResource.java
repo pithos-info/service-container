@@ -16,8 +16,8 @@
 
 package info.pithos.service.container.core.rest;
 
-import info.pithos.auth.model.Auth.LoginRequest;
-import info.pithos.auth.model.Auth.LoginResponse;
+import info.pithos.authn.model.Auth.LoginRequest;
+import info.pithos.authn.model.Auth.LoginResponse;
 import info.pithos.service.container.core.LoginHandler;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.MultiMap;
