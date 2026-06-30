@@ -46,6 +46,13 @@ class GrpcRequestContextBuilder {
         String source = coalesce(metadata, "x-forwarded-for", "x-real-ip");
         if (source != null) ctx.setSource(source);
 
+        // W3C trace-context propagation: traceparent = 00-{traceId}-{spanId}-{flags}
+        String traceparent = get(metadata, "traceparent");
+        if (traceparent != null) {
+            String[] parts = traceparent.split("-");
+            if (parts.length >= 4) ctx.setTraceId(parts[1]);
+        }
+
         return ctx.setAuthContext(auth).build();
     }
 

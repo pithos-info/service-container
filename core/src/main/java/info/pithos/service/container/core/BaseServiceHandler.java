@@ -70,7 +70,8 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
             "host",
             "user-agent",
             "cache-control",
-            "accept-language"
+            "accept-language",
+            "traceparent"
     );
 
     private final ApplicationContext applicationContext;
@@ -197,6 +198,13 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
             } catch (IllegalArgumentException ignored) {
                 // unknown log level — leave as default
             }
+        }
+
+        // W3C trace-context propagation: traceparent = 00-{traceId}-{spanId}-{flags}
+        String traceparent = h.get("traceparent");
+        if (traceparent != null) {
+            String[] parts = traceparent.split("-");
+            if (parts.length >= 4) ctx.setTraceId(parts[1]);
         }
 
         // anything not explicitly mapped goes into attributes for downstream use
