@@ -28,8 +28,16 @@ class GrpcRequestContextBuilder {
         RequestContext.Builder ctx = RequestContext.newBuilder();
         AuthContext.Builder auth = AuthContext.newBuilder();
 
-        String requestId = coalesce(metadata, "x-request-id", "x-correlation-id");
-        ctx.setRequestId(requestId != null ? requestId : UUID.randomUUID().toString());
+        // requestId: continue client session if supplied, else generate
+        String inbound = coalesce(metadata, "x-request-id", "x-correlation-id");
+        boolean clientOwned = inbound != null;
+        String requestId = clientOwned ? inbound : UUID.randomUUID().toString();
+
+        // traceId: per entry-point hop; equals requestId only on the first call
+        String traceId = clientOwned ? UUID.randomUUID().toString() : requestId;
+
+        ctx.setRequestId(requestId);
+        ctx.setTraceId(traceId);
 
         String enterpriseId = get(metadata, "x-enterprise-id");
         if (enterpriseId != null) {
@@ -45,13 +53,6 @@ class GrpcRequestContextBuilder {
 
         String source = coalesce(metadata, "x-forwarded-for", "x-real-ip");
         if (source != null) ctx.setSource(source);
-
-        // W3C trace-context propagation: traceparent = 00-{traceId}-{spanId}-{flags}
-        String traceparent = get(metadata, "traceparent");
-        if (traceparent != null) {
-            String[] parts = traceparent.split("-");
-            if (parts.length >= 4) ctx.setTraceId(parts[1]);
-        }
 
         return ctx.setAuthContext(auth).build();
     }

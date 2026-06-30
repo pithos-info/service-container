@@ -20,13 +20,12 @@ import info.pithos.authn.model.Auth.LoginRequest;
 import info.pithos.authn.model.Auth.LoginResponse;
 import info.pithos.service.container.core.LoginHandler;
 import io.smallrye.mutiny.Uni;
-import io.vertx.core.MultiMap;
+import io.vertx.ext.web.RoutingContext;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.Context;
-import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 
 @Path("/auth")
@@ -42,15 +41,7 @@ public class AuthRestResource {
 
     @POST
     @Path("/login")
-    public Uni<LoginResponse> login(LoginRequest request, @Context HttpHeaders headers) {
-        return loginHandler.handleHttp(request, toMultiMap(headers));
-    }
-
-    private static MultiMap toMultiMap(HttpHeaders httpHeaders) {
-        MultiMap map = MultiMap.caseInsensitiveMultiMap();
-        httpHeaders.getRequestHeaders().forEach(
-            (name, values) -> values.forEach(value -> map.add(name, value))
-        );
-        return map;
+    public Uni<LoginResponse> login(LoginRequest request, @Context RoutingContext routingContext) {
+        return loginHandler.handleHttp(request, routingContext);
     }
 }

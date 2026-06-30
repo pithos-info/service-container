@@ -29,6 +29,7 @@ import info.pithos.service.container.core.auth.ApiKeyResolver;
 import info.pithos.service.container.core.auth.UserContextResolver;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.MultiMap;
+import io.vertx.ext.web.RoutingContext;
 
 import java.util.Set;
 import java.util.UUID;
@@ -36,9 +37,13 @@ import java.util.UUID;
 /**
  * Abstract base for all service handlers. Subclasses implement the business
  * logic via {@link #handle(Message, RequestContext)}; the HTTP entry point
- * {@link #handleHttp(Message, MultiMap)} validates the Bearer token via
- * {@link OAuthClient#introspectToken} and maps inbound headers to the shared
- * {@link RequestContext} proto before delegating.
+ * {@link #handleHttp(Message, RoutingContext)} validates the Bearer token,
+ * resolves requestId/traceId, sets {@code X-Request-Id} on the response, and
+ * maps inbound headers to the shared {@link RequestContext} proto before delegating.
+ *
+ * <p>requestId spans the full client session (propagated via {@code X-Request-Id}).
+ * traceId is per entry-point: a new UUID each call if the client owns the requestId,
+ * or equal to requestId on the very first call (when the service generates it).
  *
  * <p>gRPC interceptors should build {@link RequestContext} from
  * {@code io.grpc.Metadata} and call {@link #handle(Message, RequestContext)}
@@ -70,8 +75,7 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
             "host",
             "user-agent",
             "cache-control",
-            "accept-language",
-            "traceparent"
+            "accept-language"
     );
 
     private final ApplicationContext applicationContext;
@@ -96,11 +100,25 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         return true;
     }
 
-    public final Uni<Resp> handleHttp(Req request, MultiMap httpHeaders) {
+    public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext) {
+        MultiMap httpHeaders = routingContext.request().headers();
+
+        // requestId: use client-supplied value to continue an existing session, else generate one
+        String inbound = coalesce(httpHeaders, "X-Request-Id", "X-Correlation-Id");
+        boolean clientOwned = inbound != null;
+        String requestId = clientOwned ? inbound : UUID.randomUUID().toString();
+
+        // traceId: unique per entry-point hop; equals requestId only on the first call
+        // (when the service itself generated the requestId and both IDs mark the same event)
+        String traceId = clientOwned ? UUID.randomUUID().toString() : requestId;
+
+        // always echo requestId back so clients that didn't send one can adopt it
+        routingContext.response().putHeader("X-Request-Id", requestId);
+
         String authHeader = httpHeaders.get("Authorization");
         if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
             String token = authHeader.substring(BEARER_PREFIX.length());
-            RequestContext bootstrap = buildRequestContext(httpHeaders, null);
+            RequestContext bootstrap = buildRequestContext(httpHeaders, null, requestId, traceId);
             ApiKeyResolver resolver = globalApiKeyResolver;
             return Uni.createFrom()
                     .completionStage(isApiKey(token) && resolver != null
@@ -111,7 +129,7 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
                             return Uni.createFrom().failure(
                                     new ServiceException(ErrorCode.UNAUTHORIZED, "OAuth token is not active"));
                         }
-                        RequestContext rc = buildRequestContext(httpHeaders, introspection);
+                        RequestContext rc = buildRequestContext(httpHeaders, introspection, requestId, traceId);
                         if (rc.getAuthContext().getUserId().isBlank()) {
                             return Uni.createFrom().failure(
                                     new ServiceException(ErrorCode.UNAUTHORIZED, "authenticated user required"));
@@ -129,7 +147,7 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
                     new ServiceException(ErrorCode.UNAUTHORIZED, "authentication required"))
                     .onFailure().transform(this::normalizeException);
         }
-        return handle(request, buildRequestContext(httpHeaders, null))
+        return handle(request, buildRequestContext(httpHeaders, null, requestId, traceId))
                 .onFailure().transform(this::normalizeException);
     }
 
@@ -144,16 +162,13 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         return new ServiceException(ErrorCode.INTERNAL_SERVER_ERROR, t.getMessage(), t);
     }
 
-    private static RequestContext buildRequestContext(MultiMap h, TokenIntrospection introspection) {
+    private static RequestContext buildRequestContext(MultiMap h, TokenIntrospection introspection,
+                                                      String requestId, String traceId) {
         RequestContext.Builder ctx = RequestContext.newBuilder();
         AuthContext.Builder auth = AuthContext.newBuilder();
 
-        String requestId = coalesce(h, "X-Request-Id", "X-Correlation-Id");
-        if (requestId != null) {
-            ctx.setRequestId(requestId);
-        } else {
-            ctx.setRequestId(UUID.randomUUID().toString());
-        }
+        ctx.setRequestId(requestId);
+        ctx.setTraceId(traceId);
 
         String enterpriseId = h.get("X-Enterprise-Id");
         if (enterpriseId != null) {
@@ -198,13 +213,6 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
             } catch (IllegalArgumentException ignored) {
                 // unknown log level — leave as default
             }
-        }
-
-        // W3C trace-context propagation: traceparent = 00-{traceId}-{spanId}-{flags}
-        String traceparent = h.get("traceparent");
-        if (traceparent != null) {
-            String[] parts = traceparent.split("-");
-            if (parts.length >= 4) ctx.setTraceId(parts[1]);
         }
 
         // anything not explicitly mapped goes into attributes for downstream use

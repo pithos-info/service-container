@@ -38,7 +38,7 @@ public final class RouteHelper {
     public <Req extends Message, Resp extends Message> void route(
             RoutingContext ctx, int successStatus,
             BaseServiceHandler<Req, Resp> handler, Req req) {
-        handler.handleHttp(req, ctx.request().headers())
+        handler.handleHttp(req, ctx)
             .subscribe().with(
                 resp -> respond(ctx, successStatus, resp),
                 err  -> routingError(ctx, err)
@@ -48,7 +48,7 @@ public final class RouteHelper {
     public <Req extends Message, Resp extends Message> void routeNoContent(
             RoutingContext ctx,
             BaseServiceHandler<Req, Resp> handler, Req req) {
-        handler.handleHttp(req, ctx.request().headers())
+        handler.handleHttp(req, ctx)
             .subscribe().with(
                 resp -> ctx.response().setStatusCode(204).end(),
                 err  -> routingError(ctx, err)
