@@ -37,7 +37,6 @@ import io.vertx.ext.web.RoutingContext;
 
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Abstract base for all service handlers. Subclasses implement the business
@@ -106,10 +105,11 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
     }
 
     /**
-     * The operation name recorded as the service-tier metric, e.g. "login", "logout",
-     * "createUser". Combined with ".latency" / ".success" / ".failure" / ".timeout".
+     * The operation descriptor recorded as the service-tier metric stem.
+     * Implement via a lambda or a typed enum that extends {@link ServiceOperation}.
+     * Example: {@code return () -> "login";} or {@code return RoleOperation.CREATE_ROLE;}
      */
-    protected abstract String operationName();
+    protected abstract ServiceOperation serviceOperation();
 
     // ── Service-tier metric helpers ───────────────────────────────────────────
 
@@ -121,30 +121,20 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
     }
 
     private void recordServiceOp(RequestContext rc, String method, ProtocolType protocol,
-                                  long startMs, Throwable ex) {
+                                  long startMs, ErrorCode successCode, Throwable ex) {
         MetricsCommitter mc = applicationContext.getMetricsCommitter();
         if (mc == null) return;
         long elapsedMs = System.currentTimeMillis() - startMs;
-        String op = operationName();
+        ServiceOperation op = serviceOperation();
         mc.record(rc, MetricEvent.newBuilder()
-                .setMetric(op + ".latency").setUnit(MetricUnit.MS).setValue(elapsedMs)
+                .setMetric(op.latency()).setUnit(MetricUnit.MS).setValue(elapsedMs)
                 .setMethod(method).setProtocol(protocol).build());
-        String outcome = (ex == null) ? op + ".success"
-                : (isTimeout(ex) ? op + ".timeout" : op + ".failure");
         mc.record(rc, MetricEvent.newBuilder()
-                .setMetric(outcome).setUnit(MetricUnit.COUNT).setValue(1.0)
+                .setMetric(ServiceOperation.resolve(op, successCode, ex)).setUnit(MetricUnit.COUNT).setValue(1.0)
                 .setMethod(method).setProtocol(protocol).build());
     }
 
-    private static boolean isTimeout(Throwable t) {
-        while (t != null) {
-            if (t instanceof TimeoutException) return true;
-            t = t.getCause();
-        }
-        return false;
-    }
-
-    public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext) {
+    public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext, ErrorCode successCode) {
         long startMs = System.currentTimeMillis();
         String method = resolvedHttpMethod();
         MultiMap httpHeaders = routingContext.request().headers();
@@ -205,16 +195,16 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         }
 
         return pipeline
-                .invoke(resp -> recordServiceOp(rcHolder[0], method, ProtocolType.HTTP, startMs, null))
-                .onFailure().invoke(ex -> recordServiceOp(rcHolder[0], method, ProtocolType.HTTP, startMs, ex));
+                .invoke(resp -> recordServiceOp(rcHolder[0], method, ProtocolType.HTTP, startMs, successCode, null))
+                .onFailure().invoke(ex -> recordServiceOp(rcHolder[0], method, ProtocolType.HTTP, startMs, successCode, ex));
     }
 
     public final Uni<Resp> handleGrpc(Req request, RequestContext rc) {
         long startMs = System.currentTimeMillis();
         return handle(request, rc)
                 .onFailure().transform(this::normalizeException)
-                .invoke(resp -> recordServiceOp(rc, "UNARY", ProtocolType.GRPC, startMs, null))
-                .onFailure().invoke(ex -> recordServiceOp(rc, "UNARY", ProtocolType.GRPC, startMs, ex));
+                .invoke(resp -> recordServiceOp(rc, "UNARY", ProtocolType.GRPC, startMs, ErrorCode.OK, null))
+                .onFailure().invoke(ex -> recordServiceOp(rc, "UNARY", ProtocolType.GRPC, startMs, ErrorCode.OK, ex));
     }
 
     private Throwable normalizeException(Throwable t) {

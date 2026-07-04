@@ -134,13 +134,13 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
     protected BaseServiceHandler(ApplicationContext applicationContext, OAuthClient oAuthClient) { ... }
 
     // HTTP entry point — called by the Quarkus REST resource; records service-tier metrics
-    public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext) { ... }
+    public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext, ErrorCode successCode) { ... }
 
     // gRPC entry point — call instead of handle() directly; records service-tier metrics
     public final Uni<Resp> handleGrpc(Req request, RequestContext rc) { ... }
 
-    // Operation name for metrics, e.g. "login", "createUser"
-    protected abstract String operationName();
+    // Operation descriptor for metrics; return a ServiceOperation (lambda or typed enum)
+    protected abstract ServiceOperation serviceOperation();
 
     // Implement business logic here
     @Override
@@ -173,7 +173,7 @@ Enum in `info.pithos.runtime.core.context` covering the full set of meaningful H
 
 | Range | Codes |
 |---|---|
-| 2xx | `OK`, `ACCEPTED` |
+| 2xx | `OK`, `CREATED`, `ACCEPTED`, `NO_CONTENT` |
 | 3xx | `MOVED_PERMANENTLY`, `FOUND`, `NOT_MODIFIED` |
 | 4xx | `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `REQUEST_TIMEOUT`, `CONFLICT`, `GONE`, `PRECONDITION_FAILED`, `PAYLOAD_TOO_LARGE`, `URI_TOO_LONG`, `UNSUPPORTED_MEDIA_TYPE`, `EXPECTATION_FAILED`, `UPGRADE_REQUIRED`, `TOO_MANY_REQUESTS` |
 | 5xx | `INTERNAL_SERVER_ERROR`, `NOT_IMPLEMENTED`, `BAD_GATEWAY`, `SERVICE_UNAVAILABLE` |
@@ -295,8 +295,10 @@ Each call records **2 metric events**:
 
 | Metric | Unit | Description |
 |---|---|---|
-| `{operation}.latency` | `MS` | wall-clock time from entry point to response |
-| `{operation}.success` / `{operation}.failure` / `{operation}.timeout` | `COUNT` | outcome of the call |
+| `{stem}.latency` | `MS` | wall-clock time from entry point to response |
+| `{stem}.{ErrorCode}` / `{stem}.timeout` | `COUNT` | outcome of the call |
+
+Outcome name examples: `login.OK`, `login.CREATED`, `login.UNAUTHORIZED`, `login.NOT_FOUND`, `login.timeout`. The `ErrorCode` name is used directly (e.g. `OK`, `CREATED`, `UNAUTHORIZED`). Async timeouts emit `{stem}.timeout` regardless of HTTP status.
 
 The tier-2 routing fields set on each event:
 
@@ -304,25 +306,50 @@ The tier-2 routing fields set on each event:
 |---|---|---|
 | `method` | HTTP verb: `GET`, `POST`, `PUT`, `PATCH` (derived from marker interface) | `UNARY` |
 | `protocol` | `HTTP` | `GRPC` |
-| `metric` | `{operationName()}.latency` / `{operationName()}.success` etc. | same |
+| `metric` | `{stem}.latency` / `{stem}.OK` etc. | same |
 
-The `operation` name comes from `operationName()`, which every concrete handler must implement.
+The stem comes from `serviceOperation().stem()`. Implement `serviceOperation()` in every concrete handler, returning a `ServiceOperation` (lambda or a typed enum that implements it).
 
 **Tier routing**: events have no `componentId` and no `step`, so `MetricEventBuilder` routes them to `ServiceMetricRaw` (latency) and `ServiceCounter` (outcome).
 
-### Example: `POST /auth/login` via HTTP
+### ServiceOperation
+
+```java
+// Minimal (lambda)
+@Override protected ServiceOperation serviceOperation() { return () -> "login"; }
+
+// Preferred for app handlers — one enum per entity groups all operations
+public enum RoleOperation implements ServiceOperation {
+    CREATE("role.create"), GET("role.get"), UPDATE("role.update"),
+    DELETE("role.delete"), LIST("role.list");
+    private final String stem;
+    RoleOperation(String stem) { this.stem = stem; }
+    @Override public String stem() { return stem; }
+}
+
+@Override protected ServiceOperation serviceOperation() { return RoleOperation.CREATE; }
+```
+
+### Example: `POST /auth/login` via HTTP (200 OK)
 
 | metric | unit | method | protocol |
 |---|---|---|---|
 | `login.latency` | MS | POST | HTTP |
-| `login.success` | COUNT | POST | HTTP |
+| `login.OK` | COUNT | POST | HTTP |
 
-### Example: `AuthService.Login` via gRPC
+### Example: `POST /roles` via HTTP (201 Created)
+
+| metric | unit | method | protocol |
+|---|---|---|---|
+| `role.create.latency` | MS | POST | HTTP |
+| `role.create.CREATED` | COUNT | POST | HTTP |
+
+### Example: `AuthService.Login` via gRPC (success)
 
 | metric | unit | method | protocol |
 |---|---|---|---|
 | `login.latency` | MS | UNARY | GRPC |
-| `login.success` | COUNT | UNARY | GRPC |
+| `login.OK` | COUNT | UNARY | GRPC |
 
 ---
 
@@ -340,8 +367,8 @@ public class CreateRoleHandler
     }
 
     @Override
-    protected String operationName() {
-        return "createRole";
+    protected ServiceOperation serviceOperation() {
+        return RoleOperation.CREATE;
     }
 
     @Override

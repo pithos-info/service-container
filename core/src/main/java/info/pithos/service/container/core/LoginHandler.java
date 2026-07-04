@@ -38,8 +38,8 @@ public class LoginHandler extends BaseServiceHandler<LoginRequest, LoginResponse
     }
 
     @Override
-    protected String operationName() {
-        return "login";
+    protected ServiceOperation serviceOperation() {
+        return () -> "login";
     }
 
     @Override

@@ -18,6 +18,7 @@ package info.pithos.service.container.core.rest;
 
 import info.pithos.authn.model.Auth.LoginRequest;
 import info.pithos.authn.model.Auth.LoginResponse;
+import info.pithos.runtime.core.context.ErrorCode;
 import info.pithos.service.container.core.LoginHandler;
 import io.smallrye.mutiny.Uni;
 import io.vertx.ext.web.RoutingContext;
@@ -42,6 +43,6 @@ public class AuthRestResource {
     @POST
     @Path("/login")
     public Uni<LoginResponse> login(LoginRequest request, @Context RoutingContext routingContext) {
-        return loginHandler.handleHttp(request, routingContext);
+        return loginHandler.handleHttp(request, routingContext, ErrorCode.OK);
     }
 }
