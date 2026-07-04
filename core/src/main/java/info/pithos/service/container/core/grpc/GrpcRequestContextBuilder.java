@@ -17,6 +17,7 @@
 package info.pithos.service.container.core.grpc;
 
 import info.pithos.runtime.model.protocol.Context.AuthContext;
+import info.pithos.runtime.model.protocol.Context.LogLevelType;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
 import io.grpc.Metadata;
 
@@ -53,6 +54,13 @@ class GrpcRequestContextBuilder {
 
         String source = coalesce(metadata, "x-forwarded-for", "x-real-ip");
         if (source != null) ctx.setSource(source);
+
+        String logLevel = get(metadata, "x-log-level");
+        if (logLevel != null) {
+            try {
+                ctx.setLogLevel(LogLevelType.valueOf(logLevel.toUpperCase()));
+            } catch (IllegalArgumentException ignored) {}
+        }
 
         return ctx.setAuthContext(auth).build();
     }
