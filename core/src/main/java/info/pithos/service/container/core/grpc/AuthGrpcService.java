@@ -45,6 +45,6 @@ public class AuthGrpcService extends AuthServiceGrpc.AuthServiceImplBase {
     public void login(LoginRequest request, StreamObserver<LoginResponse> responseObserver) {
         Metadata metadata = Optional.ofNullable(METADATA_KEY.get()).orElseGet(Metadata::new);
         RequestContext context = GrpcRequestContextBuilder.build(metadata);
-        GrpcSupport.respond(loginHandler.handle(request, context), responseObserver);
+        GrpcSupport.respond(loginHandler.handleGrpc(request, context), responseObserver);
     }
 }

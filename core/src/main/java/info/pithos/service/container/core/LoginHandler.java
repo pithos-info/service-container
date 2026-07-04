@@ -38,6 +38,11 @@ public class LoginHandler extends BaseServiceHandler<LoginRequest, LoginResponse
     }
 
     @Override
+    protected String operationName() {
+        return "login";
+    }
+
+    @Override
     public Uni<LoginResponse> handle(LoginRequest request, RequestContext context) {
         String idToken = request.getIdToken();
         if (!idToken.isBlank()) {

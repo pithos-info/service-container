@@ -131,10 +131,16 @@ Abstract base that requires an `OAuthClient` at construction time. Before delega
 public abstract class BaseServiceHandler<Req extends Message, Resp extends Message>
         implements ServiceHandler<Req, Resp> {
 
-    protected BaseServiceHandler(OAuthClient oAuthClient) { ... }
+    protected BaseServiceHandler(ApplicationContext applicationContext, OAuthClient oAuthClient) { ... }
 
-    // HTTP entry point — called by the Quarkus REST resource
-    public final Uni<Resp> handleHttp(Req request, MultiMap httpHeaders) { ... }
+    // HTTP entry point — called by the Quarkus REST resource; records service-tier metrics
+    public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext) { ... }
+
+    // gRPC entry point — call instead of handle() directly; records service-tier metrics
+    public final Uni<Resp> handleGrpc(Req request, RequestContext rc) { ... }
+
+    // Operation name for metrics, e.g. "login", "createUser"
+    protected abstract String operationName();
 
     // Implement business logic here
     @Override
@@ -145,7 +151,7 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
 }
 ```
 
-For **gRPC**, build `RequestContext` from `io.grpc.Metadata` via `GrpcRequestContextBuilder` and call `handle(request, context)` directly.
+For **gRPC**, build `RequestContext` from `io.grpc.Metadata` via `GrpcRequestContextBuilder` and call `handleGrpc(request, context)` to get metrics recorded automatically.
 
 ### `ProtobufJsonProvider`
 
@@ -281,6 +287,45 @@ service AuthService {
 
 ---
 
+## Metrics
+
+Every `handleHttp()` and `handleGrpc()` call automatically emits **service-tier metrics** (Tier 2) via `MetricsCommitter`. No caller instrumentation required.
+
+Each call records **2 metric events**:
+
+| Metric | Unit | Description |
+|---|---|---|
+| `{operation}.latency` | `MS` | wall-clock time from entry point to response |
+| `{operation}.success` / `{operation}.failure` / `{operation}.timeout` | `COUNT` | outcome of the call |
+
+The tier-2 routing fields set on each event:
+
+| Field | HTTP value | gRPC value |
+|---|---|---|
+| `method` | HTTP verb: `GET`, `POST`, `PUT`, `PATCH` (derived from marker interface) | `UNARY` |
+| `protocol` | `HTTP` | `GRPC` |
+| `metric` | `{operationName()}.latency` / `{operationName()}.success` etc. | same |
+
+The `operation` name comes from `operationName()`, which every concrete handler must implement.
+
+**Tier routing**: events have no `componentId` and no `step`, so `MetricEventBuilder` routes them to `ServiceMetricRaw` (latency) and `ServiceCounter` (outcome).
+
+### Example: `POST /auth/login` via HTTP
+
+| metric | unit | method | protocol |
+|---|---|---|---|
+| `login.latency` | MS | POST | HTTP |
+| `login.success` | COUNT | POST | HTTP |
+
+### Example: `AuthService.Login` via gRPC
+
+| metric | unit | method | protocol |
+|---|---|---|---|
+| `login.latency` | MS | UNARY | GRPC |
+| `login.success` | COUNT | UNARY | GRPC |
+
+---
+
 ## Implementing a handler
 
 ```java
@@ -290,8 +335,13 @@ public class CreateRoleHandler
         implements PostHandler<CreateRoleRequest, RoleResponse> {
 
     @Inject
-    public CreateRoleHandler(OAuthClient oAuthClient) {
-        super(oAuthClient);
+    public CreateRoleHandler(ApplicationContext applicationContext, OAuthClient oAuthClient) {
+        super(applicationContext, oAuthClient);
+    }
+
+    @Override
+    protected String operationName() {
+        return "createRole";
     }
 
     @Override

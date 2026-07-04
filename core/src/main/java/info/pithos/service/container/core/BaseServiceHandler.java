@@ -22,6 +22,10 @@ import info.pithos.authn.model.TokenIntrospection;
 import info.pithos.runtime.core.context.ApplicationContext;
 import info.pithos.runtime.core.context.ErrorCode;
 import info.pithos.runtime.core.context.ServiceException;
+import info.pithos.runtime.core.metrics.MetricsCommitter;
+import info.pithos.runtime.model.metrics.Metrics.MetricEvent;
+import info.pithos.runtime.model.metrics.Metrics.MetricUnit;
+import info.pithos.runtime.model.metrics.Metrics.ProtocolType;
 import info.pithos.runtime.model.protocol.Context.AuthContext;
 import info.pithos.runtime.model.protocol.Context.LogLevelType;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
@@ -33,6 +37,7 @@ import io.vertx.ext.web.RoutingContext;
 
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Abstract base for all service handlers. Subclasses implement the business
@@ -45,9 +50,9 @@ import java.util.UUID;
  * traceId is per entry-point: a new UUID each call if the client owns the requestId,
  * or equal to requestId on the very first call (when the service generates it).
  *
- * <p>gRPC interceptors should build {@link RequestContext} from
- * {@code io.grpc.Metadata} and call {@link #handle(Message, RequestContext)}
- * directly.
+ * <p>gRPC services should build {@link RequestContext} from
+ * {@code io.grpc.Metadata} and call {@link #handleGrpc(Message, RequestContext)}
+ * to get metrics recorded automatically.
  */
 public abstract class BaseServiceHandler<Req extends Message, Resp extends Message>
         implements ServiceHandler<Req, Resp> {
@@ -100,7 +105,48 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         return true;
     }
 
+    /**
+     * The operation name recorded as the service-tier metric, e.g. "login", "logout",
+     * "createUser". Combined with ".latency" / ".success" / ".failure" / ".timeout".
+     */
+    protected abstract String operationName();
+
+    // ── Service-tier metric helpers ───────────────────────────────────────────
+
+    private String resolvedHttpMethod() {
+        if (this instanceof GetHandler)   return "GET";
+        if (this instanceof PutHandler)   return "PUT";
+        if (this instanceof PatchHandler) return "PATCH";
+        return "POST";
+    }
+
+    private void recordServiceOp(RequestContext rc, String method, ProtocolType protocol,
+                                  long startMs, Throwable ex) {
+        MetricsCommitter mc = applicationContext.getMetricsCommitter();
+        if (mc == null) return;
+        long elapsedMs = System.currentTimeMillis() - startMs;
+        String op = operationName();
+        mc.record(rc, MetricEvent.newBuilder()
+                .setMetric(op + ".latency").setUnit(MetricUnit.MS).setValue(elapsedMs)
+                .setMethod(method).setProtocol(protocol).build());
+        String outcome = (ex == null) ? op + ".success"
+                : (isTimeout(ex) ? op + ".timeout" : op + ".failure");
+        mc.record(rc, MetricEvent.newBuilder()
+                .setMetric(outcome).setUnit(MetricUnit.COUNT).setValue(1.0)
+                .setMethod(method).setProtocol(protocol).build());
+    }
+
+    private static boolean isTimeout(Throwable t) {
+        while (t != null) {
+            if (t instanceof TimeoutException) return true;
+            t = t.getCause();
+        }
+        return false;
+    }
+
     public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext) {
+        long startMs = System.currentTimeMillis();
+        String method = resolvedHttpMethod();
         MultiMap httpHeaders = routingContext.request().headers();
 
         // requestId: use client-supplied value to continue an existing session, else generate one
@@ -115,12 +161,16 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         // always echo requestId back so clients that didn't send one can adopt it
         routingContext.response().putHeader("X-Request-Id", requestId);
 
+        // Holds the best available RequestContext for metric tagging; upgraded as auth resolves
+        RequestContext[] rcHolder = { buildRequestContext(httpHeaders, null, requestId, traceId) };
+
+        Uni<Resp> pipeline;
         String authHeader = httpHeaders.get("Authorization");
         if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
             String token = authHeader.substring(BEARER_PREFIX.length());
-            RequestContext bootstrap = buildRequestContext(httpHeaders, null, requestId, traceId);
+            RequestContext bootstrap = rcHolder[0];
             ApiKeyResolver resolver = globalApiKeyResolver;
-            return Uni.createFrom()
+            pipeline = Uni.createFrom()
                     .completionStage(isApiKey(token) && resolver != null
                         ? () -> resolver.resolve(bootstrap, token)
                         : () -> oAuthClient.introspectToken(bootstrap, token))
@@ -134,21 +184,37 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
                             return Uni.createFrom().failure(
                                     new ServiceException(ErrorCode.UNAUTHORIZED, "authenticated user required"));
                         }
+                        rcHolder[0] = rc;
                         UserContextResolver ucr = globalUserContextResolver;
                         Uni<RequestContext> ctxUni = ucr != null
                             ? Uni.createFrom().completionStage(() -> ucr.resolve(rc))
                             : Uni.createFrom().item(rc);
-                        return ctxUni.flatMap(resolvedRc -> handle(request, resolvedRc));
+                        return ctxUni.flatMap(resolvedRc -> {
+                            rcHolder[0] = resolvedRc;
+                            return handle(request, resolvedRc);
+                        });
                     })
                     .onFailure().transform(this::normalizeException);
-        }
-        if (requiresAuthentication()) {
-            return Uni.createFrom().<Resp>failure(
+        } else if (requiresAuthentication()) {
+            pipeline = Uni.createFrom().<Resp>failure(
                     new ServiceException(ErrorCode.UNAUTHORIZED, "authentication required"))
                     .onFailure().transform(this::normalizeException);
+        } else {
+            pipeline = handle(request, rcHolder[0])
+                    .onFailure().transform(this::normalizeException);
         }
-        return handle(request, buildRequestContext(httpHeaders, null, requestId, traceId))
-                .onFailure().transform(this::normalizeException);
+
+        return pipeline
+                .invoke(resp -> recordServiceOp(rcHolder[0], method, ProtocolType.HTTP, startMs, null))
+                .onFailure().invoke(ex -> recordServiceOp(rcHolder[0], method, ProtocolType.HTTP, startMs, ex));
+    }
+
+    public final Uni<Resp> handleGrpc(Req request, RequestContext rc) {
+        long startMs = System.currentTimeMillis();
+        return handle(request, rc)
+                .onFailure().transform(this::normalizeException)
+                .invoke(resp -> recordServiceOp(rc, "UNARY", ProtocolType.GRPC, startMs, null))
+                .onFailure().invoke(ex -> recordServiceOp(rc, "UNARY", ProtocolType.GRPC, startMs, ex));
     }
 
     private Throwable normalizeException(Throwable t) {
