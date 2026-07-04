@@ -22,6 +22,7 @@ import info.pithos.authn.model.TokenIntrospection;
 import info.pithos.runtime.core.context.ApplicationContext;
 import info.pithos.runtime.core.context.ErrorCode;
 import info.pithos.runtime.core.context.ServiceException;
+import info.pithos.runtime.core.log.ServiceLogger;
 import info.pithos.runtime.core.metrics.MetricsCommitter;
 import info.pithos.runtime.model.metrics.Metrics.MetricEvent;
 import info.pithos.runtime.model.metrics.Metrics.MetricUnit;
@@ -132,6 +133,12 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         mc.record(rc, MetricEvent.newBuilder()
                 .setMetric(ServiceOperation.resolve(op, successCode, ex)).setUnit(MetricUnit.COUNT).setValue(1.0)
                 .setMethod(method).setProtocol(protocol).build());
+        ServiceLogger log = applicationContext.getSystemContext().getLogger();
+        if (ex == null) {
+            log.logRequest(rc, getClass(), LogLevelType.DEBUG, "{} {} {} {}ms", op.stem(), method, protocol.name(), elapsedMs);
+        } else {
+            log.logRequest(rc, getClass(), LogLevelType.ERROR, ex, "{} {} {} failed after {}ms", op.stem(), method, protocol.name(), elapsedMs);
+        }
     }
 
     public final Uni<Resp> handleHttp(Req request, RoutingContext routingContext, ErrorCode successCode) {
@@ -150,6 +157,15 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
 
         // always echo requestId back so clients that didn't send one can adopt it
         routingContext.response().putHeader("X-Request-Id", requestId);
+
+        applicationContext.getSystemContext().getLogger().logRequest(null, getClass(), LogLevelType.DEBUG,
+                "http headers requestId={} enterpriseId={} userId={} source={} userAgent={} hasAuth={}",
+                requestId,
+                httpHeaders.get("X-Enterprise-Id"),
+                httpHeaders.get("X-User-Id"),
+                coalesce(httpHeaders, "X-Forwarded-For", "X-Real-IP"),
+                httpHeaders.get("User-Agent"),
+                httpHeaders.get("Authorization") != null);
 
         // Holds the best available RequestContext for metric tagging; upgraded as auth resolves
         RequestContext[] rcHolder = { buildRequestContext(httpHeaders, null, requestId, traceId) };
@@ -201,6 +217,10 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
 
     public final Uni<Resp> handleGrpc(Req request, RequestContext rc) {
         long startMs = System.currentTimeMillis();
+        applicationContext.getSystemContext().getLogger().logRequest(rc, getClass(), LogLevelType.DEBUG,
+                "grpc requestContext requestId={} enterpriseId={} userId={}",
+                rc.getRequestId(), rc.getEnterpriseId(),
+                rc.hasAuthContext() ? rc.getAuthContext().getUserId() : "");
         return handle(request, rc)
                 .onFailure().transform(this::normalizeException)
                 .invoke(resp -> recordServiceOp(rc, "UNARY", ProtocolType.GRPC, startMs, ErrorCode.OK, null))
@@ -218,8 +238,8 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
         return new ServiceException(ErrorCode.INTERNAL_SERVER_ERROR, t.getMessage(), t);
     }
 
-    private static RequestContext buildRequestContext(MultiMap h, TokenIntrospection introspection,
-                                                      String requestId, String traceId) {
+    private RequestContext buildRequestContext(MultiMap h, TokenIntrospection introspection,
+                                               String requestId, String traceId) {
         RequestContext.Builder ctx = RequestContext.newBuilder();
         AuthContext.Builder auth = AuthContext.newBuilder();
 
@@ -276,7 +296,12 @@ public abstract class BaseServiceHandler<Req extends Message, Resp extends Messa
                 .filter(name -> !MAPPED_HEADERS.contains(name.toLowerCase()))
                 .forEach(name -> ctx.putAttributes(name, h.get(name)));
 
-        return ctx.setAuthContext(auth).build();
+        RequestContext rc = ctx.setAuthContext(auth).build();
+        applicationContext.getSystemContext().getLogger().logRequest(rc, getClass(), LogLevelType.DEBUG,
+                "requestContext requestId={} enterpriseId={} userId={}",
+                rc.getRequestId(), rc.getEnterpriseId(),
+                rc.hasAuthContext() ? rc.getAuthContext().getUserId() : "");
+        return rc;
     }
 
     // JWTs have exactly two dots (header.payload.signature); API keys have none
