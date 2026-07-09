@@ -7,6 +7,7 @@
     <parent>
         <groupId>info.pithos.service.container</groupId>
         <artifactId>info-pithos-service-container</artifactId>
+    <name>Pithos Service Container</name>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
 
